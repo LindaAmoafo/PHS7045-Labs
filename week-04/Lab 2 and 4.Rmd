@@ -1,0 +1,160 @@
+---
+title: "Untitled"
+author: "Linda Amoafo"
+date: '2023-01-19'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(profvis)
+```
+
+
+```{r}
+Posterior.draw <- function(alpha_t,beta_t,Y_t,draws){
+  n <- length(Y_t)
+  rbeta(draws,alpha_t+sum(Y_t), beta_t+n-sum(Y_t))
+} 
+
+V_0 <- function(V_t,n_t) min(sum(V_t[-1]*(n_t[-1]+1)/(rep(n_t[1],3)+1)), max(V_t[-1]))
+
+equal <- function(N,seed=101,draws,alpha_t,beta_t,trt.eff){
+  set.seed(seed)
+  
+  n_t <- rep(N/4,4)
+  Y_0 <- rbinom(n_t[1],1,trt.eff[1]);Y_1 <- rbinom(n_t[2],1,trt.eff[2]);
+  Y_2 <- rbinom(n_t[3],1,trt.eff[3]);Y_3 <- rbinom(n_t[4],1,trt.eff[4])
+  
+  P_t <- data.frame(apply(cbind(Y_0,Y_1,Y_2,Y_3),2,
+                          \(y_t) Posterior.draw(alpha_t,beta_t,Y_t=y_t,draws)))
+  names(P_t) <- c("P_0","P_1","P_2","P_3")
+  
+  ## checking for success
+  pair.compare <- apply(P_t[,c("P_1","P_2","P_3")],2,\(i) mean(i>P_t$P_0))
+  #ProbBest <- max(pair.compare)
+  success.threshold <- if(max(pair.compare)>0.9912){"Yes"}else{"No"}
+  ProbBest <- if(success.threshold=="Yes"){paste(names(pair.compare)[which.max(pair.compare)], " ",max(pair.compare),sep="")}else{NULL}
+  
+  
+  return(list(success.threshold=success.threshold,
+              pair.compare=pair.compare,
+              ProbBest=ProbBest, n_t = n_t))
+}
+
+  profvis({ 
+   equal(N=228,seed=101,draws,alpha_t,beta_t,trt.eff=rep(0.35,4)) 
+  })
+
+equal(N=228,seed=101,draws,alpha_t,beta_t,trt.eff=rep(0.35,4))
+
+```
+
+
+```{r}
+RAR <- function(N,seed=101,draws,alpha_t,beta_t,trt.eff){
+  set.seed(seed)
+  #set.seed(18*100)
+  n_t <- rep(10,4)
+  Y_0 <- rbinom(n_t[1],1,trt.eff[1]);Y_1 <- rbinom(n_t[2],1,trt.eff[2]);
+  Y_2 <- rbinom(n_t[3],1,trt.eff[3]);Y_3 <- rbinom(n_t[4],1,trt.eff[4])
+  
+  P_t <- data.frame(apply(cbind(Y_0,Y_1,Y_2,Y_3),2,
+                          function(y_t) Posterior.draw(alpha_t,beta_t,Y_t=y_t,draws)))
+  
+  P_t$max <- apply(P_t, 1, which.max)
+  sum.max.treat <- table(P_t$max)
+  V_t <- rep(0,4); V_t[as.numeric(names(sum.max.treat))] <-  prop.table(sum.max.treat)
+  V_t[1]<- V_0(V_t,n_t)
+  V_t <- V_t/sum(V_t)
+  
+  N <- N-40
+
+  while(N>0){
+  new.allocate <- switch((N>40)+1,sapply(1:N,function(i) sample(0:3,1,prob=V_t)),
+                         sapply(1:40,function(i) sample(0:3,1,prob=V_t)))
+  
+  allocate.sum <-table(new.allocate); ## fix such that unallocated treatment have sum=0
+  new.nt <- rep(0,4); names(new.nt) <- c("0","1","2","3")
+   if(length(allocate.sum)==4){
+    new.nt <- allocate.sum}else{
+      new.nt[match(names(allocate.sum), names(new.nt))] <- allocate.sum }
+  
+  n_t <- n_t + new.nt
+  
+  Y_0 <- c(Y_0,rbinom(new.nt[1],1,trt.eff[1]));Y_1 <- c(Y_1,rbinom(new.nt[2],1,trt.eff[2]));
+  Y_2 <- c(Y_2,rbinom(new.nt[3],1,trt.eff[3]));Y_3 <- c(Y_3,rbinom(new.nt[4],1,trt.eff[4]))
+  
+  P_t <- data.frame(sapply(list(Y_0,Y_1,Y_2,Y_3),
+                           function(y_t) Posterior.draw(alpha_t,beta_t,Y_t=y_t,draws)))
+  names(P_t) <- c("P_0","P_1","P_2","P_3")
+  P_t$max <- apply(P_t, 1, which.max)
+  sum.max.treat <- table(P_t$max)
+  V_t <- rep(0,4); V_t[as.numeric(names(sum.max.treat))] <-  prop.table(sum.max.treat)
+  V_t[1]<- V_0(V_t,n_t)
+  V_t <- V_t/sum(V_t)
+  
+  N <- N-40
+  }
+  
+  ## checking for success
+  pair.compare <- apply(P_t[,c("P_1","P_2","P_3")],2,function(i) mean(i>P_t$P_0))
+  #success <- if(max(pair.compare)>0.5){"Yes"}else{"No"}
+ #ProbBest <- max(pair.compare)
+  success.threshold <- if(max(pair.compare)>0.9892){"Yes"}else{"No"}
+  ProbBest <- if(success.threshold=="Yes"){paste(names(pair.compare)[which.max(pair.compare)], " ",max(pair.compare),sep="")}else{NULL}
+  
+  return(list(success.threshold=success.threshold,
+              pair.compare=pair.compare,ProbBest=ProbBest,n_t = n_t))
+  
+}
+```
+
+
+```{r}
+trial <- function(N,seed=101,draws,alpha_t,beta_t,trt.eff,design){
+  if(design=="equal") output <- equal(N,seed,draws,alpha_t,beta_t,trt.eff)
+  if(design=="RAR") output <- RAR(N,seed,draws,alpha_t,beta_t,trt.eff)
+  
+  return(list(success.threshold=output$success.threshold,
+              pair.compare=output$pair.compare,ProbBest=output$ProbBest,n_t = output$n_t))
+}
+
+
+alpha_t=0.35;beta_t=0.65;draws=1000;trt.eff=rep(0.35,4);N=228;seed=101
+
+trial(N=228,seed=101,draws,alpha_t,beta_t,trt.eff,design="RAR")
+```
+
+
+
+```{r}
+
+equalTypeIerror.obj <- sapply(1:10000,
+                              \(x) equal(N=228,seed=101,draws,alpha_t,beta_t,trt.eff=rep(0.35,4)) [["success.threshold"]])
+
+equalTypeIerror <- mean(equalTypeIerror.obj=="Yes")
+
+
+RARTypeIerror.obj <- sapply(1:10000, \(x) RAR(N=228,seed=101,draws,alpha_t,beta_t,trt.eff=rep(0.35,4))[["success.threshold"]])
+RARTypeIerror <- mean(equalTypeIerror.obj=="Yes")
+
+
+
+
+
+
+RARTypeIerror.obj <- vector(length =10000)
+for(i in 1:10000){
+  RARTypeIerror.obj[i] <- trial(N=228,seed=i*100,draws=1000,alpha_t=0.35,beta_t=0.65,
+                              trt.eff=rep(0.35,4),design="RAR")[["success.threshold"]]
+}
+
+
+```
+
+
+
+
+
+
